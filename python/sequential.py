@@ -57,7 +57,7 @@ class EquipmentReplacementSim:
                     
                     accumulated_profits_per_year[year] += yearly_profit
 
-            typical_years = [str(y) for y, count in replacement_years_count.items() if count > (self.simulations * 0.2)]
+            typical_years = [str(y) for y, count in sorted(replacement_years_count.items()) if count > (self.simulations * 0.2)]
             all_replacement_events.append(", ".join(typical_years))
             
             machine_profits[m_idx] = accumulated_profits_per_year / self.simulations
