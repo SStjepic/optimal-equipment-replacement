@@ -1,6 +1,7 @@
 use rand::Rng;
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{self, File};
 use rayon::prelude::*;
@@ -44,35 +45,46 @@ impl EquipmentReplacementSim {
         })
     }
 
+    #[inline]
     fn get_revenue(&self, age: i32, machine: &MachineInput, year: usize) -> f64 {
         let market_factor = (1.0 + self.market_growth_rate).powf(year as f64);
         (machine.base_profit * (1.0 - machine.profit_decay).powi(age)) * market_factor
     }
 
+    #[inline]
     fn get_maint_cost(&self, age: i32, machine: &MachineInput) -> f64 {
         machine.maint_base * machine.maint_growth.powi(age)
     }
 
+    #[inline]
     fn get_resale_value(&self, age: i32, machine: &MachineInput) -> f64 {
         machine.resale_base * machine.resale_decay.powi(age)
     }
 
+    #[inline]
     fn get_breakdown_prob(&self, age: i32) -> f64 {
         (0.03 * age as f64).min(0.6)
     }
 
     fn run_monte_carlo(&self) -> (Vec<String>, Vec<Vec<f64>>) {
-        println!("Starting parallel simulation on {} threads...", rayon::current_num_threads());
+        println!(
+            "Starting parallel simulation on {} threads...",
+            rayon::current_num_threads()
+        );
 
         self.machines.par_iter().map(|m| {
+
             let mut accumulated_profits = vec![0.0; self.horizon_years];
-            let mut replacement_counts: BTreeMap<usize, usize> = BTreeMap::new();
-            let mut rng = rand::thread_rng();
+            let mut replacement_counts = vec![0usize; self.horizon_years];
+
+            let mut rng = SmallRng::from_entropy();
+            let threshold = m.base_profit * 0.4;
 
             for _ in 0..self.simulations {
                 let mut current_age = m.initial_age;
 
                 for year in 0..self.horizon_years {
+
                     let revenue = self.get_revenue(current_age, m, year);
                     let mut maint = self.get_maint_cost(current_age, m);
 
@@ -80,27 +92,30 @@ impl EquipmentReplacementSim {
                         maint += m.repair_cost;
                     }
 
-                    let mut yearly_profit = revenue - maint;
-                    let threshold = m.base_profit * 0.4;
+                    let yearly_profit = revenue - maint;
 
-                    if yearly_profit < threshold || maint > (revenue * 0.6) {
+                    if yearly_profit < threshold || maint > revenue * 0.6 {
+
                         let resale = self.get_resale_value(current_age, m);
-                        yearly_profit -= m.buy_price - resale;
+                        accumulated_profits[year] += yearly_profit - (m.buy_price - resale);
+
                         current_age = 0;
-                        *replacement_counts.entry(year + 1).or_insert(0) += 1;
+                        replacement_counts[year] += 1;
+
                     } else {
+                        accumulated_profits[year] += yearly_profit;
                         current_age += 1;
                     }
-
-                    accumulated_profits[year] += yearly_profit;
                 }
             }
 
             let typical_years: Vec<String> = replacement_counts
                 .iter()
-                .filter(|&(_, &count)| count > (self.simulations / 5))
-                .map(|(year, _)| year.to_string())
+                .enumerate()
+                .filter(|(_, count)| **count > (self.simulations / 5))
+                .map(|(year, _)| (year + 1).to_string())
                 .collect();
+
 
             let avg_profits: Vec<f64> = accumulated_profits
                 .into_iter()
@@ -108,8 +123,8 @@ impl EquipmentReplacementSim {
                 .collect();
 
             (typical_years.join(", "), avg_profits)
-        })
-        .unzip() 
+
+        }).unzip()
     }
 
     fn save_results(&self, logs: Vec<String>, profits: Vec<Vec<f64>>) -> Result<(), Box<dyn Error>> {
@@ -118,7 +133,7 @@ impl EquipmentReplacementSim {
 
         let profit_path = format!("{}/machine_profit_parallel.csv", path);
         let mut p_writer = csv::Writer::from_path(profit_path)?;
-        
+
         let mut headers = vec!["machine_id".to_string()];
         for i in 1..=self.horizon_years {
             headers.push(format!("year_{}_profit", i));
@@ -163,7 +178,7 @@ fn main() {
             if let Err(e) = sim.save_results(logs, profits) {
                 panic!("Error saving results: {}", e);
             }
-        },
+        }
         Err(e) => panic!("Error loading input: {}", e),
     }
 }
