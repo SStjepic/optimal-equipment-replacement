@@ -2,10 +2,9 @@ import numpy as np
 import pandas as pd
 from multiprocessing import Pool, cpu_count
 from numba import njit
-import time
 
-@njit
-def run_machine_numba(
+@njit(nogil=True, fastmath=True)
+def simulate_lifecycle(
     initial_age, base_profit, profit_decay,
     maint_base, maint_growth,
     resale_base, resale_decay,
@@ -13,16 +12,12 @@ def run_machine_numba(
     horizon_years, simulations,
     market_growth_rate
 ):
-
-    accumulated_profits = np.zeros(horizon_years)
-    replacement_counts = np.zeros(horizon_years)
+    accumulated_profits = np.zeros(horizon_years, dtype=np.float64)
+    replacement_counts = np.zeros(horizon_years, dtype=np.float64)
 
     for _ in range(simulations):
-
         current_age = initial_age
-
         for year in range(horizon_years):
-
             market_factor = (1 + market_growth_rate) ** year
             revenue = base_profit * ((1 - profit_decay) ** current_age) * market_factor
             maint = maint_base * (maint_growth ** current_age)
@@ -45,94 +40,62 @@ def run_machine_numba(
 
     return accumulated_profits / simulations, replacement_counts
 
-def run_machine_sim(args):
-    m_data, horizon_years, simulations, market_growth_rate = args
-
-    profits, replacement_counts = run_machine_numba(
-        m_data['initial_age'],
-        m_data['base_profit'],
-        m_data['profit_decay'],
-        m_data['maint_base'],
-        m_data['maint_growth'],
-        m_data['resale_base'],
-        m_data['resale_decay'],
-        m_data['buy_price'],
-        m_data['repair_cost'],
-        horizon_years,
-        simulations,
-        market_growth_rate
+def execute_simulation(args):
+    m_values, horizon_years, simulations, market_growth_rate = args
+    
+    profits, replacement_counts = simulate_lifecycle(
+        m_values[1], m_values[2], m_values[3], m_values[4], 
+        m_values[5], m_values[6], m_values[7], m_values[8], 
+        m_values[9], horizon_years, simulations, market_growth_rate
     )
 
-    typical_years = [
-        str(i + 1)
-        for i in range(horizon_years)
-        if replacement_counts[i] > simulations * 0.2
-    ]
+    typical_years = [str(i + 1) for i in range(horizon_years) if replacement_counts[i] > simulations * 0.2]
 
-    return {
-        'id': m_data['id'],
-        'mean_profits': profits,
-        'replacement_logs': ", ".join(typical_years)
-    }
-
+    return (int(m_values[0]), profits, ", ".join(typical_years))
 
 class EquipmentReplacementParallelSim:
-
     def __init__(self, input_file, horizon_years, simulations):
         self.df_machines = pd.read_csv(input_file)
         self.horizon_years = horizon_years
         self.simulations = simulations
         self.market_growth_rate = 0.01
 
-    def run(self):
-
-        num_cores = cpu_count()
-        print(f"Starting parallel simulation using {num_cores} cores")
-
+    def run(self, num_cores=None, save = True):
+        if num_cores is None:
+            num_cores = cpu_count()
+        
+        data_matrix = self.df_machines.values 
+        
         tasks = [
-            (row.to_dict(), self.horizon_years, self.simulations, self.market_growth_rate)
-            for _, row in self.df_machines.iterrows()
+            (data_matrix[i], self.horizon_years, self.simulations, self.market_growth_rate)
+            for i in range(len(data_matrix))
         ]
         
         with Pool(processes=num_cores) as pool:
-            results = pool.map(run_machine_sim, tasks)
-
-        self.save_results(results)
+            results = pool.map(execute_simulation, tasks)
+            
+        if save:
+            self.save_results(results)
 
     def save_results(self, results):
+        results.sort(key=lambda x: x[0])
+        
+        ids = [r[0] for r in results]
+        profits = np.array([r[1] for r in results])
+        logs = [r[2] for r in results]
 
-        results.sort(key=lambda x: x['id'])
+        system_total = np.round(np.sum(profits, axis=0), 2)
+        cols = ['machine_id'] + [f'year_{i+1}_profit' for i in range(self.horizon_years)]
+        
+        df_profit = pd.DataFrame(np.round(profits, 2), columns=cols[1:])
+        df_profit.insert(0, 'machine_id', ids)
+        
+        total_row = pd.DataFrame([['SYSTEM_TOTAL'] + list(system_total)], columns=cols)
+        pd.concat([df_profit, total_row]).to_csv("machine_profit_parallel.csv", index=False)
 
-        profit_rows = []
-        all_profits_matrix = []
-
-        for r in results:
-            row = [int(r['id'])] + list(np.round(r['mean_profits'], 2))
-            profit_rows.append(row)
-            all_profits_matrix.append(r['mean_profits'])
-
-        system_total = np.round(np.sum(all_profits_matrix, axis=0), 2)
-        profit_rows.append(['SYSTEM_TOTAL'] + list(system_total))
-
-        cols = ['machine_id'] + [
-            f'year_{i+1}_profit' for i in range(self.horizon_years)
-        ]
-
-        pd.DataFrame(profit_rows, columns=cols)\
-            .to_csv("machine_profit_parallel.csv", index=False)
-
-        repl_rows = [
-            {'machine_id': int(r['id']),
-             'replacement_years': r['replacement_logs']}
-            for r in results
-        ]
-
-        pd.DataFrame(repl_rows)\
+        pd.DataFrame({'machine_id': ids, 'replacement_years': logs})\
             .to_csv("machine_replacements_parallel.csv", index=False)
 
-        print("Results saved to 'machine_profit_parallel.csv' and 'machine_replacements_parallel.csv'.")
-
-
 if __name__ == "__main__":
-    simulation = EquipmentReplacementParallelSim('machines_input.csv',horizon_years=30, simulations=10000)
-    simulation.run()
+    sim = EquipmentReplacementParallelSim('machines_input.csv', 30, 10000)
+    sim.run()
