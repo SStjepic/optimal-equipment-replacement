@@ -1,4 +1,5 @@
 use rand::Rng;
+use std::env;
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use serde::Deserialize;
@@ -172,7 +173,27 @@ impl EquipmentReplacementSim {
 }
 
 fn main() {
-    match EquipmentReplacementSim::new("../data/machines_input.csv", 30, 10000) {
+    let args: Vec<String> = env::args().collect();
+
+    let num_cores = if args.len() > 2 {
+        args[2].parse::<usize>().unwrap_or_else(|_| rayon::current_num_threads())
+    } else {
+        8
+    };
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_cores)
+        .build_global()
+        .unwrap();
+
+    let input_file = if args.len() > 1 {
+        &args[1]
+    } else {
+        "../data/machines_input.csv"
+    };
+
+
+    match EquipmentReplacementSim::new(input_file, 30, 10000) {
         Ok(sim) => {
             let (logs, profits) = sim.run_monte_carlo();
             if let Err(e) = sim.save_results(logs, profits) {

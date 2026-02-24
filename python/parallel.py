@@ -1,9 +1,7 @@
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool, cpu_count
-from numba import njit
 
-@njit(nogil=True, fastmath=True)
 def simulate_lifecycle(
     initial_age, base_profit, profit_decay,
     maint_base, maint_growth,

@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-def generate_machines(num_machines=1000):
+def generate_machines(num_machines=1000, output_file='machines_input.csv'):
     data = []
     for i in range(num_machines):
         initial_age = np.random.randint(0, 7)
@@ -37,8 +37,8 @@ def generate_machines(num_machines=1000):
     ]
     
     df = pd.DataFrame(data, columns=columns)
-    df.to_csv('machines_input.csv', index=False)
-    print("File 'machines_input.csv' has been successfully generated.")
+    df.to_csv(output_file, index=False)
+    print(f"File '{output_file}' has been successfully generated with {num_machines} machines.")
 
 if __name__ == "__main__":
     generate_machines(100)
